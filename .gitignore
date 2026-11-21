@@ -1,0 +1,28 @@
+# Build outputs
+[Bb]in/Debug/
+[Bb]in/Release/
+[Oo]bj/
+*.exe
+*.exe.config
+*.dll
+*.pdb
+
+# Visual Studio / Rider cache
+.vs/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Logs & temp
+*.log
+*.tmp
+*.nlp
+
+# Local user profiles (contains sensitive auth keys)
+profiles.json
+
+# Keep bin folder structure
+!bin/
+!bin/.gitkeep

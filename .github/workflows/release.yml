@@ -1,0 +1,100 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: '发布版本标签 (例如 v1.0.0)'
+        required: false
+        default: ''
+      prerelease:
+        description: '标记为预发布 (Pre-release)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 配置 MSBuild 环境
+        uses: microsoft/setup-msbuild@v2
+
+      - name: 确定发布版本号
+        id: get_version
+        shell: pwsh
+        run: |
+          $ver = "${{ github.event.inputs.tag_name }}"
+          if ([string]::IsNullOrWhiteSpace($ver)) {
+            $ver = "${{ github.ref_name }}"
+          }
+          if ([string]::IsNullOrWhiteSpace($ver) -or $ver -eq "main" -or $ver -eq "master") {
+            $ver = "v1.0.0-build.${{ github.run_number }}"
+          }
+          Write-Host "发布版本: $ver"
+          "VERSION=$ver" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: 编译项目 (Release x64)
+        run: |
+          msbuild GostConnector.csproj /p:Configuration=Release /p:Platform=x64 /v:minimal
+
+      - name: 组织产物包与 gost 核心
+        shell: pwsh
+        run: |
+          $distDir = "dist"
+          $binDir = Join-Path $distDir "bin"
+          New-Item -ItemType Directory -Path $binDir -Force | Out-Null
+
+          # 拷贝编译出的连接器程序
+          Copy-Item "bin\Release\GostConnector.exe" -Destination $distDir -Force
+          Copy-Item "bin\Release\GostConnector.exe.config" -Destination $distDir -Force
+
+          # 检查仓库内是否有 bin/gost.exe；若无则自动从官方拉取 Windows amd64 核心
+          $localGost = "bin\gost.exe"
+          if (Test-Path $localGost) {
+            Write-Host "使用仓库内置 bin/gost.exe"
+            Copy-Item $localGost -Destination $binDir -Force
+          } else {
+            Write-Host "未发现内置 gost.exe，正在从官方 Release 下载 gost 3.3.3..."
+            $gostUrl = "https://github.com/go-gost/gost/releases/download/v3.3.3/gost_3.3.3_windows_amd64.zip"
+            $tempZip = "gost_temp.zip"
+            Invoke-WebRequest -Uri $gostUrl -OutFile $tempZip
+            Expand-Archive -Path $tempZip -DestinationPath "gost_temp" -Force
+            Copy-Item "gost_temp\gost.exe" -Destination (Join-Path $binDir "gost.exe") -Force
+            Remove-Item $tempZip, "gost_temp" -Recurse -Force
+          }
+
+          # 打包 ZIP
+          $zipName = "GostConnector-${{ env.VERSION }}-windows-x64.zip"
+          Write-Host "生成归档压缩包: $zipName"
+          Compress-Archive -Path "$distDir\*" -DestinationPath $zipName -Force
+
+          # 计算 SHA256 哈希值
+          $hash = (Get-FileHash -Algorithm SHA256 -Path $zipName).Hash.ToLower()
+          "$hash  $zipName" | Out-File -FilePath "sha256sum.txt" -Encoding ascii
+          Write-Host "SHA256: $hash"
+
+      - name: 发布到 GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.VERSION }}
+          name: Release ${{ env.VERSION }}
+          draft: false
+          prerelease: ${{ github.event.inputs.prerelease || false }}
+          generate_release_notes: true
+          files: |
+            GostConnector-*-windows-x64.zip
+            sha256sum.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
